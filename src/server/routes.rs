@@ -1,5 +1,5 @@
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
@@ -19,7 +19,10 @@ pub async fn run_server(config: ServerConfig) -> anyhow::Result<()> {
         .route("/health", get(health_handler))
         .route("/streams/level/{id}/playlist.m3u8", get(playlist_handler))
         .route("/streams/level/{id}/{segment}", get(segment_handler))
-        .route("/streams/level/{id}/ingest", post(ingest_handler))
+        .route(
+            "/streams/level/{id}/ingest",
+            post(ingest_handler).layer(DefaultBodyLimit::max(100 * 1024 * 1024)),
+        )
         .route(
             "/api/sources",
             get(list_sources_handler).post(register_source_handler),

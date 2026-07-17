@@ -8,7 +8,7 @@ Wants=network-online.target
 Type=simple
 User=amethyst-audio
 Group=amethyst-audio
-ExecStart=/usr/bin/amethyst-audio --host 0.0.0.0 --port 3000 --segment-duration 10 --output-dir /var/lib/amethyst-audio/output
+ExecStart=/usr/bin/amethyst-audio --config /etc/amethyst-audio/config.yaml
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -16,7 +16,6 @@ StandardError=journal
 SyslogIdentifier=amethyst-audio
 Environment=RUST_LOG=info
 
-# Security hardening
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict

@@ -176,8 +176,7 @@ impl HlsService {
 
         state.buffer.extend_from_slice(data);
 
-        let segment_bytes =
-            (self.config.segment_duration_sec * state.bitrate_bps / 8) as usize;
+        let segment_bytes = (self.config.segment_duration_sec * state.bitrate_bps / 8) as usize;
 
         while state.buffer.len() >= segment_bytes.max(1024) {
             let chunk: Vec<u8> = state

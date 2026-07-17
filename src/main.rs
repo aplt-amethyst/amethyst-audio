@@ -1,4 +1,5 @@
 use clap::Parser;
+use std::path::PathBuf;
 use tracing::info;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::layer::SubscriberExt;
@@ -15,17 +16,50 @@ use amethyst_audio::server::run_server;
     about = "HLS stream server with pure Rust MPEG-TS muxer"
 )]
 struct Cli {
-    #[arg(short, long, default_value = "0.0.0.0")]
-    host: String,
+    #[arg(short, long, default_value = "/etc/amethyst-audio/config.yaml")]
+    config: PathBuf,
 
-    #[arg(short, long, default_value = "3000")]
-    port: u16,
+    #[arg(long)]
+    host: Option<String>,
 
-    #[arg(short, long, default_value_t = 10)]
-    segment_duration: u64,
+    #[arg(long)]
+    port: Option<u16>,
 
-    #[arg(short, long, default_value = "output")]
-    output_dir: String,
+    #[arg(long = "segment-duration")]
+    segment_duration: Option<u64>,
+
+    #[arg(long = "max-live-segments")]
+    max_live_segments: Option<usize>,
+
+    #[arg(long = "output-dir")]
+    output_dir: Option<String>,
+}
+
+fn load_config(cli: &Cli) -> anyhow::Result<ServerConfig> {
+    let mut config = if cli.config.exists() {
+        let content = std::fs::read_to_string(&cli.config).unwrap_or_else(|_| String::new());
+        serde_yaml::from_str::<ServerConfig>(&content).unwrap_or_else(|_| ServerConfig::default())
+    } else {
+        ServerConfig::default()
+    };
+
+    if let Some(ref host) = cli.host {
+        config.host = host.clone();
+    }
+    if let Some(port) = cli.port {
+        config.port = port;
+    }
+    if let Some(seg) = cli.segment_duration {
+        config.segment_duration_sec = seg;
+    }
+    if let Some(mls) = cli.max_live_segments {
+        config.max_live_segments = mls;
+    }
+    if let Some(ref od) = cli.output_dir {
+        config.output_dir = od.clone();
+    }
+
+    Ok(config)
 }
 
 fn init_logging() {
@@ -49,19 +83,14 @@ async fn main() -> anyhow::Result<()> {
     init_logging();
 
     let cli = Cli::parse();
-
-    let config = ServerConfig {
-        host: cli.host,
-        port: cli.port,
-        segment_duration_sec: cli.segment_duration,
-        output_dir: cli.output_dir,
-        ..ServerConfig::default()
-    };
+    let config = load_config(&cli)?;
 
     info!(
         host = %config.host,
         port = config.port,
         segment_duration_sec = config.segment_duration_sec,
+        max_live_segments = config.max_live_segments,
+        output_dir = %config.output_dir,
         "amethyst-audio initializing"
     );
 
