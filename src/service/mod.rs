@@ -101,8 +101,14 @@ impl HlsService {
             SourceFormat::Aac | SourceFormat::Mp3 => {
                 let file_data = fs::read(&file_path).context("failed to read source file")?;
                 let (sr, br) = Self::probe_raw_audio(&file_data, format);
+                let effective_len = if format == SourceFormat::Mp3 {
+                    let offset = Self::skip_id3v2(&file_data);
+                    file_data.len() - offset
+                } else {
+                    file_data.len()
+                };
                 let duration = if br > 0 {
-                    file_data.len() as f64 * 8.0 / br as f64
+                    effective_len as f64 * 8.0 / br as f64
                 } else {
                     0.0
                 };
@@ -291,6 +297,20 @@ impl HlsService {
         raw
     }
 
+    fn skip_id3v2(data: &[u8]) -> usize {
+        if data.len() >= 10 && &data[..3] == b"ID3" {
+            let size = ((data[6] as usize & 0x7F) << 21)
+                | ((data[7] as usize & 0x7F) << 14)
+                | ((data[8] as usize & 0x7F) << 7)
+                | (data[9] as usize & 0x7F);
+            (10 + size).min(data.len())
+        } else if data.len() >= 2 {
+            crate::ts::mp3_parser::find_mp3_sync(data, 0).unwrap_or(0)
+        } else {
+            0
+        }
+    }
+
     fn probe_raw_audio(data: &[u8], format: SourceFormat) -> (u32, u64) {
         match format {
             SourceFormat::Aac => {
@@ -303,11 +323,14 @@ impl HlsService {
                 }
             }
             SourceFormat::Mp3 => {
-                if let Ok((frame, _)) = mp3_parser::parse_mp3_frame(data) {
-                    (frame.sample_rate_hz, frame.bitrate_bps)
-                } else {
-                    (44100, 128_000)
+                let offset = Self::skip_id3v2(data);
+                if offset < data.len() {
+                    let audio_data = &data[offset..];
+                    if let Ok((frame, _)) = mp3_parser::parse_mp3_frame(audio_data) {
+                        return (frame.sample_rate_hz, frame.bitrate_bps);
+                    }
                 }
+                (44100, 128_000)
             }
             _ => (44100, 128_000),
         }
@@ -406,7 +429,8 @@ impl HlsService {
             }
             SourceFormat::Mp3 => {
                 let data = fs::read(&info.file_path).context("failed to read MP3 file")?;
-                Ok(data)
+                let offset = Self::skip_id3v2(&data);
+                Ok(data[offset..].to_vec())
             }
             SourceFormat::Wav => {
                 let wav_info = wav::read_wav(&info.file_path)?;
