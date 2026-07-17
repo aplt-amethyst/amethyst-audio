@@ -42,6 +42,7 @@ depends = "$auto, ffmpeg"
 section = "net"
 priority = "optional"
 assets = [
+    ["target/release/amethyst-audio", "usr/bin/amethyst-audio", "755"],
     ["debian/amethyst-audio.service", "lib/systemd/system/amethyst-audio.service", "644"],
     ["debian/config.yaml", "etc/amethyst-audio/config.yaml", "644"],
 ]
