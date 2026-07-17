@@ -37,8 +37,26 @@ struct Cli {
 
 fn load_config(cli: &Cli) -> anyhow::Result<ServerConfig> {
     let mut config = if cli.config.exists() {
-        let content = std::fs::read_to_string(&cli.config).unwrap_or_else(|_| String::new());
-        serde_yaml::from_str::<ServerConfig>(&content).unwrap_or_else(|_| ServerConfig::default())
+        let content = std::fs::read_to_string(&cli.config).unwrap_or_else(|e| {
+            tracing::warn!(
+                path = %cli.config.display(),
+                error = %e,
+                "failed to read config file, using defaults"
+            );
+            String::new()
+        });
+        if content.is_empty() {
+            ServerConfig::default()
+        } else {
+            serde_yaml::from_str::<ServerConfig>(&content).unwrap_or_else(|e| {
+                tracing::warn!(
+                    path = %cli.config.display(),
+                    error = %e,
+                    "failed to parse config file, using defaults"
+                );
+                ServerConfig::default()
+            })
+        }
     } else {
         ServerConfig::default()
     };
