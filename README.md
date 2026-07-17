@@ -31,7 +31,30 @@ http://localhost:3000/streams/level/my-audio/playlist.m3u8
 | `GET` | `/health` | Health check |
 | `GET` | `/streams/level/{id}/playlist.m3u8` | HLS playlist |
 | `GET` | `/streams/level/{id}/{segment}.ts` | TS segment |
+| `POST` | `/streams/level/{id}/ingest` | Push live audio (AAC ADTS) |
 | `POST` | `/api/sources` | Register audio source |
+
+## Push Live Stream (推流)
+
+Register a live source and push AAC ADTS data:
+
+```bash
+# Option A: register first, then push
+curl -X POST localhost:3000/api/sources \
+  -H "Content-Type: application/json" \
+  -d '{"id":"live","live":true,"bitrate":128000}'
+
+# Push AAC ADTS frames (e.g. from ffmpeg)
+ffmpeg -i input.wav -c:a aac -b:a 128k -f adts - | \
+  curl -X POST --data-binary @- \
+  http://localhost:3000/streams/level/live/ingest
+
+# Option B: auto-create on first ingest (default 128kbps)
+cat audio.aac | curl -X POST --data-binary @- \
+  http://localhost:3000/streams/level/live/ingest
+
+# Play: http://localhost:3000/streams/level/live/playlist.m3u8
+```
 
 ## License
 

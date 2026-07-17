@@ -57,7 +57,21 @@ Per RFC 8216:
 ### Service: HLS Lifecycle (`src/service/`)
 
 - **VOD**: full file → segment on register → static .m3u8 with ENDLIST
-- **Live**: rolling window → sliding .m3u8 without ENDLIST
+- **Live**: register + ingest raw AAC ADTS → accumulate → auto-segment → sliding window .m3u8 without ENDLIST
+
+### Live Ingest Flow
+
+1. Register: `POST /api/sources {"id":"stream","live":true,"bitrate":128000}`
+2. Push: `POST /streams/level/stream/ingest` (raw AAC ADTS body)
+3. Play: `GET /streams/level/stream/playlist.m3u8`
+
+Server strips ADTS headers → raw AAC → TS muxer → 188-byte packets → .ts segments.
+
+ffmpeg pipe example:
+```bash
+ffmpeg -i input.wav -c:a aac -b:a 128k -f adts pipe:1 | \
+  curl -X POST --data-binary @- http://localhost:3000/streams/level/live/ingest
+```
 
 ### Server: HTTP API (`src/server/`)
 
@@ -66,5 +80,6 @@ Per RFC 8216:
 | `GET` | `/health` | `application/json` |
 | `GET` | `/streams/level/{id}/playlist.m3u8` | `application/vnd.apple.mpegurl` |
 | `GET` | `/streams/level/{id}/{seg}.ts` | `video/mp2t` |
+| `POST` | `/streams/level/{id}/ingest` | `application/octet-stream`, `application/json` (response) |
 | `GET` | `/api/sources` | `application/json` |
 | `POST` | `/api/sources` | `application/json` |
