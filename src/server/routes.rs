@@ -18,7 +18,7 @@ pub async fn run_server(config: ServerConfig) -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(health_handler))
         .route("/streams/level/{id}/playlist.m3u8", get(playlist_handler))
-        .route("/streams/level/{id}/{segment}.ts", get(segment_handler))
+        .route("/streams/level/{id}/{segment}", get(segment_handler))
         .route("/streams/level/{id}/ingest", post(ingest_handler))
         .route(
             "/api/sources",

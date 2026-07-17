@@ -79,7 +79,7 @@ ffmpeg -i input.wav -c:a aac -b:a 128k -f adts pipe:1 | \
 |--------|------|-------------|
 | `GET` | `/health` | `application/json` |
 | `GET` | `/streams/level/{id}/playlist.m3u8` | `application/vnd.apple.mpegurl` |
-| `GET` | `/streams/level/{id}/{seg}.ts` | `video/mp2t` |
+| `GET` | `/streams/level/{id}/{seg}` | `video/mp2t` |
 | `POST` | `/streams/level/{id}/ingest` | `application/octet-stream`, `application/json` (response) |
 | `GET` | `/api/sources` | `application/json` |
 | `POST` | `/api/sources` | `application/json` |
