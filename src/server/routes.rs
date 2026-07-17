@@ -1,0 +1,191 @@
+use axum::extract::{Path, State};
+use axum::http::{header, StatusCode};
+use axum::response::{IntoResponse, Json, Response};
+use axum::routing::get;
+use axum::Router;
+use serde::Deserialize;
+use std::sync::Arc;
+use tower_http::cors::CorsLayer;
+use tracing::{error, info, warn};
+
+use crate::config::ServerConfig;
+use crate::service::HlsService;
+
+pub async fn run_server(config: ServerConfig) -> anyhow::Result<()> {
+    let service = Arc::new(HlsService::new(config.clone()));
+
+    let app = Router::new()
+        .route("/health", get(health_handler))
+        .route("/streams/level/{id}/playlist.m3u8", get(playlist_handler))
+        .route("/streams/level/{id}/{segment}.ts", get(segment_handler))
+        .route(
+            "/api/sources",
+            get(list_sources_handler).post(register_source_handler),
+        )
+        .layer(CorsLayer::permissive())
+        .with_state(service);
+
+    let addr = format!("{}:{}", config.host, config.port);
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+
+    info!(%addr, "amethyst-audio server starting");
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    info!("amethyst-audio server shut down gracefully");
+    Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => {
+            warn!("received SIGINT, shutting down gracefully");
+        }
+        () = terminate => {
+            warn!("received SIGTERM, shutting down gracefully");
+        }
+    }
+}
+
+async fn health_handler() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "status": "ok",
+        "service": "amethyst-audio",
+        "version": env!("CARGO_PKG_VERSION")
+    }))
+}
+
+async fn playlist_handler(
+    State(service): State<Arc<HlsService>>,
+    Path(source_id): Path<String>,
+) -> Result<Response, AppError> {
+    match service.get_playlist(&source_id).await {
+        Ok(playlist) => Ok((
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")],
+            playlist,
+        )
+            .into_response()),
+        Err(e) => {
+            error!(source_id = %source_id, error = %e, "playlist not found");
+            Err(AppError::NotFound(format!(
+                "playlist not found: {source_id}"
+            )))
+        }
+    }
+}
+
+async fn segment_handler(
+    State(service): State<Arc<HlsService>>,
+    Path((source_id, segment)): Path<(String, String)>,
+) -> Result<Response, AppError> {
+    match service.get_segment_data(&source_id, &segment).await {
+        Ok(data) => {
+            Ok((StatusCode::OK, [(header::CONTENT_TYPE, "video/mp2t")], data).into_response())
+        }
+        Err(e) => {
+            error!(source_id = %source_id, segment = %segment, error = %e, "segment not found");
+            Err(AppError::NotFound(format!("segment not found: {segment}")))
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RegisterSourceRequest {
+    id: String,
+    file_path: String,
+}
+
+async fn register_source_handler(
+    State(service): State<Arc<HlsService>>,
+    Json(req): Json<RegisterSourceRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    info!(source_id = %req.id, file_path = %req.file_path, "registering source");
+
+    let file_path = std::path::PathBuf::from(&req.file_path);
+    if !file_path.exists() {
+        return Err(AppError::BadRequest(format!(
+            "file not found: {}",
+            req.file_path
+        )));
+    }
+
+    let info = service
+        .register_source(req.id.clone(), file_path)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "failed to register source");
+            AppError::Internal(e.to_string())
+        })?;
+
+    match service.generate_vod_segments(&req.id).await {
+        Ok(segments) => {
+            info!(source_id = %req.id, segment_count = segments.len(), "vod segments generated");
+        }
+        Err(e) => {
+            warn!(source_id = %req.id, error = %e, "vod segment generation had issues");
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "status": "registered",
+        "source": {
+            "id": info.id,
+            "format": format!("{:?}", info.format),
+            "sample_rate": info.sample_rate,
+            "bitrate_bps": info.bitrate_bps,
+            "duration_sec": info.duration_sec,
+        }
+    })))
+}
+
+async fn list_sources_handler(State(service): State<Arc<HlsService>>) -> Json<serde_json::Value> {
+    let sources = service.list_sources().await;
+    Json(serde_json::json!({
+        "sources": sources.iter().map(|s| {
+            serde_json::json!({
+                "id": s.id,
+                "format": format!("{:?}", s.format),
+                "sample_rate": s.sample_rate,
+                "duration_sec": s.duration_sec,
+            })
+        }).collect::<Vec<_>>()
+    }))
+}
+
+#[derive(Debug)]
+enum AppError {
+    NotFound(String),
+    BadRequest(String),
+    Internal(String),
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let (status, message) = match self {
+            Self::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            Self::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+        };
+        (status, Json(serde_json::json!({ "error": message }))).into_response()
+    }
+}
