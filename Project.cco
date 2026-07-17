@@ -1,0 +1,13 @@
+{
+    "name": "amethyst-audio",
+    "namespace": "aplt.amethyst.audio",
+    "version": "0.1.0",
+    "edition": "2024",
+    "description": "HLS stream server with pure Rust MPEG-TS muxer supporting VOD and live streaming",
+    "authors": ["CNT Development Team"],
+    "license": "AGPL-3.0",
+    "repository": "aplt-amethyst/amethyst-audio",
+    "keywords": ["hls", "mpeg-ts", "streaming", "audio", "m3u8"],
+    "dependencies": {},
+    "features": {}
+}
