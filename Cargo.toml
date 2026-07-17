@@ -1,0 +1,60 @@
+[package]
+name = "amethyst-audio"
+version = "0.1.0"
+edition = "2021"
+description = "HLS stream server with pure Rust MPEG-TS muxer"
+license = "AGPL-3.0"
+repository = "https://github.com/aplt-amethyst/amethyst-audio"
+
+[[bin]]
+name = "amethyst-audio"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", features = ["macros"] }
+tower-http = { version = "0.6", features = ["cors"] }
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+hound = "3"
+claxon = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
+
+[lints.clippy]
+all = "deny"
+
+[package.metadata.deb]
+maintainer = "CNT Development Team <dev@aplt-cnt.com>"
+copyright = "2026 CNT Development Team"
+license-file = ["LICENSE", "0"]
+depends = "$auto, ffmpeg"
+section = "net"
+priority = "optional"
+assets = [
+    ["target/release/amethyst-audio.bin", "usr/bin/amethyst-audio", "755"],
+    ["debian/amethyst-audio.service", "lib/systemd/system/amethyst-audio.service", "644"],
+    ["debian/config.yaml", "etc/amethyst-audio/config.yaml", "644"],
+]
+maintainer-scripts = "debian/"
+extended-description = """amethyst-audio is an HLS (HTTP Live Streaming) server with a pure
+Rust MPEG-TS muxer supporting VOD and live streaming modes.
+
+Features:
+ - Pure MPEG-TS muxer (188-byte packets, PAT, PMT, PES, PCR)
+ - AAC ADTS and MP3 direct remux (no transcoding)
+ - WAV/FLAC transcoding via ffmpeg
+ - .m3u8 playlist generation per RFC 8216
+ - /health endpoint with JSON structured logging
+ - Graceful SIGTERM shutdown
+ - systemd service integration"""
