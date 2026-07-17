@@ -27,6 +27,7 @@ pub async fn run_server(config: ServerConfig) -> anyhow::Result<()> {
             "/api/sources",
             get(list_sources_handler).post(register_source_handler),
         )
+        .route("/api/sources/{id}/flush", post(flush_source_handler))
         .layer(CorsLayer::permissive())
         .with_state(service);
 
@@ -233,6 +234,22 @@ async fn list_sources_handler(State(service): State<Arc<HlsService>>) -> Json<se
             })
         }).collect::<Vec<_>>()
     }))
+}
+
+async fn flush_source_handler(
+    State(service): State<Arc<HlsService>>,
+    Path(source_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    match service.flush_live_buffer(&source_id).await {
+        Ok(()) => Ok(Json(serde_json::json!({
+            "status": "flushed",
+            "source_id": source_id,
+        }))),
+        Err(e) => {
+            error!(source_id = %source_id, error = %e, "flush failed");
+            Err(AppError::NotFound(format!("source not found: {source_id}")))
+        }
+    }
 }
 
 fn is_safe_segment_name(name: &str) -> bool {
