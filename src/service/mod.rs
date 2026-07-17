@@ -324,8 +324,8 @@ impl HlsService {
 
         let raw_audio = self.load_and_prepare_audio(&info)?;
         let stream_type = match info.format {
-            SourceFormat::Aac => STREAM_TYPE_AAC,
-            SourceFormat::Mp3 | SourceFormat::Wav | SourceFormat::Flac => STREAM_TYPE_MP3,
+            SourceFormat::Aac | SourceFormat::Wav | SourceFormat::Flac => STREAM_TYPE_AAC,
+            SourceFormat::Mp3 => STREAM_TYPE_MP3,
         };
 
         let segment_bytes =
