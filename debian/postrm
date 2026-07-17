@@ -1,0 +1,20 @@
+#!/bin/sh
+set -e
+
+# Stop and disable the service before removal
+if [ -x /usr/bin/systemctl ] || [ -x /bin/systemctl ]; then
+    deb-systemd-invoke stop amethyst-audio.service || true
+    deb-systemd-invoke disable amethyst-audio.service || true
+    systemctl daemon-reload || true
+fi
+
+# Clean up on purge
+if [ "$1" = "purge" ]; then
+    rm -rf /var/lib/amethyst-audio
+    if getent passwd amethyst-audio >/dev/null; then
+        deluser --quiet --system amethyst-audio || true
+    fi
+    if getent group amethyst-audio >/dev/null; then
+        delgroup --quiet --system amethyst-audio || true
+    fi
+fi

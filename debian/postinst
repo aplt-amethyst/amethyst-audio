@@ -1,0 +1,22 @@
+#!/bin/sh
+set -e
+
+# Create system user and group
+if ! getent group amethyst-audio >/dev/null; then
+    addgroup --system --quiet amethyst-audio
+fi
+if ! getent passwd amethyst-audio >/dev/null; then
+    adduser --system --quiet --ingroup amethyst-audio --no-create-home \
+        --home /var/lib/amethyst-audio --shell /usr/sbin/nologin amethyst-audio
+fi
+
+# Create state directory
+mkdir -p /var/lib/amethyst-audio/output
+chown -R amethyst-audio:amethyst-audio /var/lib/amethyst-audio
+
+# Enable and start the service
+if [ -x /usr/bin/systemctl ] || [ -x /bin/systemctl ]; then
+    systemctl daemon-reload || true
+    deb-systemd-invoke enable amethyst-audio.service || true
+    deb-systemd-invoke start amethyst-audio.service || true
+fi

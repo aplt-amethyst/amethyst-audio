@@ -1,0 +1,5 @@
+#!/bin/sh
+set -e
+if [ -x /usr/bin/systemctl ] || [ -x /bin/systemctl ]; then
+    deb-systemd-invoke stop amethyst-audio.service || true
+fi
