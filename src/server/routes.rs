@@ -103,6 +103,9 @@ async fn segment_handler(
     State(service): State<Arc<HlsService>>,
     Path((source_id, segment)): Path<(String, String)>,
 ) -> Result<Response, AppError> {
+    if !is_safe_segment_name(&segment) {
+        return Err(AppError::BadRequest("invalid segment name".to_string()));
+    }
     match service.get_segment_data(&source_id, &segment).await {
         Ok(data) => {
             Ok((StatusCode::OK, [(header::CONTENT_TYPE, "video/mp2t")], data).into_response())
@@ -230,6 +233,19 @@ async fn list_sources_handler(State(service): State<Arc<HlsService>>) -> Json<se
             })
         }).collect::<Vec<_>>()
     }))
+}
+
+fn is_safe_segment_name(name: &str) -> bool {
+    if name.is_empty()
+        || name.contains("..")
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains('\0')
+    {
+        return false;
+    }
+    name.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
 }
 
 #[derive(Debug)]

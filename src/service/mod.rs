@@ -472,6 +472,10 @@ impl HlsService {
     }
 
     pub async fn get_segment_data(&self, _source_id: &str, segment_name: &str) -> Result<Vec<u8>> {
+        if segment_name.contains("..") || segment_name.contains('/') || segment_name.contains('\\')
+        {
+            anyhow::bail!("invalid segment name");
+        }
         let seg_path = self.output_dir.join(segment_name);
         fs::read(&seg_path).with_context(|| format!("segment not found: {segment_name}"))
     }
