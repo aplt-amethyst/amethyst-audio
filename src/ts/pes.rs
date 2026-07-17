@@ -71,13 +71,13 @@ fn build_pes_header(data_len: usize, pts_90khz: u64) -> Vec<u8> {
     };
 
     let pts_data_bits = pts_90khz & 0x1_FFFF_FFFF;
-    let pts_encoded = (0x21u64 << 40)
-        | ((pts_data_bits >> 30) & 0x07) << 37
-        | 0x01u64 << 36
-        | ((pts_data_bits >> 15) & 0x7FFF) << 22
-        | 0x01u64 << 21
-        | (pts_data_bits & 0x7FFF) << 7
-        | 0x01u64 << 6;
+    let pts_encoded = (0x2u64 << 36)
+        | ((pts_data_bits >> 30) & 0x07) << 33
+        | 0x01u64 << 32
+        | ((pts_data_bits >> 15) & 0x7FFF) << 17
+        | 0x01u64 << 16
+        | (pts_data_bits & 0x7FFF) << 1
+        | 0x01u64;
 
     header.push((pes_packet_length >> 8) as u8);
     header.push((pes_packet_length & 0xFF) as u8);
@@ -165,5 +165,25 @@ mod tests {
 
         let pts = compute_pts(16000, 128_000);
         assert_eq!(pts, 90_000);
+    }
+
+    #[test]
+    fn test_pes_header_pts_encoding() {
+        let data = vec![0xAA; 170];
+        let packets = build_pes_packet(&data, 90000, 0);
+
+        let first_pkt = packets[0].to_bytes();
+        assert_eq!(first_pkt[0], 0x47, "TS sync byte");
+
+        assert_eq!(&first_pkt[4..7], &[0x00, 0x00, 0x01], "PES start code");
+        assert_eq!(first_pkt[7], 0xC0, "stream ID");
+        assert_eq!(first_pkt[12], 0x05, "PES header data length");
+
+        let pts_prefix = first_pkt[13] >> 4;
+        assert!(
+            pts_prefix == 0x02 || pts_prefix == 0x03,
+            "PTS prefix nibble should be 0010 or 0011, got {:04b}",
+            pts_prefix
+        );
     }
 }
