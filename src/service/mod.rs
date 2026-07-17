@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use tokio::sync::RwLock;
+use tracing::{debug, info};
 
 #[derive(Debug, Clone)]
 pub struct SourceInfo {
@@ -22,6 +23,7 @@ pub struct SourceInfo {
     pub sample_rate: u32,
     pub bitrate_bps: u64,
     pub duration_sec: f64,
+    pub is_live: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,11 +46,20 @@ impl SourceFormat {
     }
 }
 
+struct IngestState {
+    buffer: Vec<u8>,
+    muxer: TsMuxer,
+    segment_idx: u32,
+    audio_elapsed_ms: u64,
+    bitrate_bps: u64,
+}
+
 pub struct HlsService {
     config: ServerConfig,
     output_dir: PathBuf,
     sources: RwLock<HashMap<String, SourceInfo>>,
     playlists: RwLock<HashMap<String, Playlist>>,
+    ingest_states: RwLock<HashMap<String, IngestState>>,
 }
 
 impl HlsService {
@@ -61,6 +72,7 @@ impl HlsService {
             output_dir,
             sources: RwLock::new(HashMap::new()),
             playlists: RwLock::new(HashMap::new()),
+            ingest_states: RwLock::new(HashMap::new()),
         }
     }
 
@@ -74,7 +86,7 @@ impl HlsService {
                 let info = wav::read_wav(&file_path)?;
                 (
                     info.sample_rate,
-                    info.sample_rate as u64 * info.channels as u64 * 16,
+                    u64::from(info.sample_rate) * u64::from(info.channels) * 16,
                     info.duration_sec,
                 )
             }
@@ -82,7 +94,7 @@ impl HlsService {
                 let info = flac::read_flac(&file_path)?;
                 (
                     info.sample_rate,
-                    info.sample_rate as u64 * info.channels as u64 * 16,
+                    u64::from(info.sample_rate) * u64::from(info.channels) * 16,
                     info.duration_sec,
                 )
             }
@@ -105,6 +117,7 @@ impl HlsService {
             sample_rate,
             bitrate_bps,
             duration_sec,
+            is_live: false,
         };
 
         let mut sources = self.sources.write().await;
@@ -119,12 +132,172 @@ impl HlsService {
         Ok(info)
     }
 
+    pub async fn register_live_source(&self, id: String, bitrate_bps: u64) -> SourceInfo {
+        let info = SourceInfo {
+            id: id.clone(),
+            file_path: PathBuf::new(),
+            format: SourceFormat::Aac,
+            sample_rate: 44100,
+            bitrate_bps,
+            duration_sec: 0.0,
+            is_live: true,
+        };
+
+        let mut sources = self.sources.write().await;
+        sources.insert(id.clone(), info.clone());
+
+        let mut playlists = self.playlists.write().await;
+        playlists.insert(
+            id.clone(),
+            Playlist::new(self.config.segment_duration_sec, true),
+        );
+
+        let mut states = self.ingest_states.write().await;
+        states.insert(
+            id.clone(),
+            IngestState {
+                buffer: Vec::new(),
+                muxer: TsMuxer::new(STREAM_TYPE_AAC, bitrate_bps),
+                segment_idx: 0,
+                audio_elapsed_ms: 0,
+                bitrate_bps,
+            },
+        );
+
+        info!(source_id = %id, bitrate_bps, "live source registered");
+        info
+    }
+
+    pub async fn ingest_chunk(&self, id: &str, data: &[u8]) -> Result<()> {
+        let mut states = self.ingest_states.write().await;
+        let state = states
+            .get_mut(id)
+            .with_context(|| format!("live source not found: {id}"))?;
+
+        state.buffer.extend_from_slice(data);
+
+        let segment_bytes =
+            (self.config.segment_duration_sec * state.bitrate_bps / 8) as usize;
+
+        while state.buffer.len() >= segment_bytes.max(1024) {
+            let chunk: Vec<u8> = state
+                .buffer
+                .drain(..segment_bytes.min(state.buffer.len()))
+                .collect();
+            self.write_live_segment(id, state, &chunk).await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn flush_live_buffer(&self, id: &str) -> Result<()> {
+        let mut states = self.ingest_states.write().await;
+        let state = states
+            .get_mut(id)
+            .with_context(|| format!("live source not found: {id}"))?;
+
+        if !state.buffer.is_empty() {
+            let chunk = std::mem::take(&mut state.buffer);
+            self.write_live_segment(id, state, &chunk).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn write_live_segment(
+        &self,
+        source_id: &str,
+        state: &mut IngestState,
+        raw_chunk: &[u8],
+    ) -> Result<()> {
+        let raw_aac = Self::strip_adts_frames(raw_chunk);
+        if raw_aac.is_empty() {
+            return Ok(());
+        }
+
+        let elapsed = state.audio_elapsed_ms % (self.config.segment_duration_sec * 1000);
+        let elapsed_seconds = elapsed / 1000;
+
+        let packets = if state.segment_idx == 0 || elapsed_seconds == 0 {
+            let mut pkts = state.muxer.begin_segment();
+            pkts.extend(state.muxer.mux(&raw_aac, elapsed));
+            pkts
+        } else {
+            state.muxer.mux(&raw_aac, elapsed_seconds * 1000)
+        };
+
+        if packets.is_empty() {
+            state.audio_elapsed_ms += (raw_aac.len() as u64 * 8 * 1000) / state.bitrate_bps.max(1);
+            return Ok(());
+        }
+
+        let seg_filename = format!("{}-{:04}.ts", source_id, state.segment_idx);
+        let seg_path = self.output_dir.join(&seg_filename);
+        let seg_bytes = write_packets(&packets);
+        fs::write(&seg_path, &seg_bytes)
+            .with_context(|| format!("failed to write live segment: {seg_filename}"))?;
+
+        debug!(
+            source_id = %source_id,
+            segment = state.segment_idx,
+            size = seg_bytes.len(),
+            "live segment written"
+        );
+
+        let filename = seg_filename;
+        let duration = self.config.segment_duration_sec as f64;
+
+        {
+            let mut playlists = self.playlists.write().await;
+            if let Some(pl) = playlists.get_mut(source_id) {
+                pl.add_segment(filename, duration);
+                pl.trim_to_window(self.config.max_live_segments);
+
+                let removed_start = pl.media_sequence;
+                for old_idx in 0..removed_start {
+                    let old_name = format!("{}-{:04}.ts", source_id, old_idx);
+                    let old_path = self.output_dir.join(&old_name);
+                    let _ = fs::remove_file(&old_path);
+                }
+            }
+        }
+
+        state.segment_idx += 1;
+        state.audio_elapsed_ms += (raw_aac.len() as u64 * 8 * 1000) / state.bitrate_bps.max(1);
+
+        Ok(())
+    }
+
+    fn strip_adts_frames(data: &[u8]) -> Vec<u8> {
+        let mut raw = Vec::new();
+        let mut offset = 0;
+        while offset < data.len() {
+            if let Some(sync) = adts_parser::find_adts_sync(data, offset) {
+                if sync > offset {
+                    offset = sync;
+                }
+                match adts_parser::parse_adts_frame(&data[offset..]) {
+                    Ok((frame, consumed)) => {
+                        raw.extend_from_slice(&frame.raw_aac);
+                        offset += consumed;
+                    }
+                    Err(_) => {
+                        offset += 1;
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+        raw
+    }
+
     fn probe_raw_audio(data: &[u8], format: SourceFormat) -> (u32, u64) {
         match format {
             SourceFormat::Aac => {
                 if let Ok((frame, _)) = adts_parser::parse_adts_frame(data) {
                     let bitrate =
-                        (frame.frame_length as u64 * 8 * frame.sample_rate_hz as u64) / 1024;
+                        (frame.frame_length as u64 * 8 * u64::from(frame.sample_rate_hz)) / 1024;
                     (frame.sample_rate_hz, bitrate)
                 } else {
                     (44100, 128_000)
@@ -175,7 +348,7 @@ impl HlsService {
                 let mut pkts = muxer.begin_segment();
                 pkts.extend(muxer.mux(chunk, elapsed_ms % segment_duration_ms));
                 pkts
-            } else if elapsed_ms >= seg_idx as u64 * segment_duration_ms {
+            } else if elapsed_ms >= u64::from(seg_idx) * segment_duration_ms {
                 seg_idx += 1;
                 let mut pkts = muxer.begin_segment();
                 pkts.extend(muxer.mux(chunk, 0));
@@ -230,27 +403,7 @@ impl HlsService {
         match info.format {
             SourceFormat::Aac => {
                 let data = fs::read(&info.file_path).context("failed to read AAC file")?;
-                let mut raw = Vec::new();
-                let mut offset = 0;
-                while offset < data.len() {
-                    if let Some(sync) = adts_parser::find_adts_sync(&data, offset) {
-                        if sync > offset {
-                            offset = sync;
-                        }
-                        match adts_parser::parse_adts_frame(&data[offset..]) {
-                            Ok((frame, consumed)) => {
-                                raw.extend_from_slice(&frame.raw_aac);
-                                offset += consumed;
-                            }
-                            Err(_) => {
-                                offset += 1;
-                            }
-                        }
-                    } else {
-                        break;
-                    }
-                }
-                Ok(raw)
+                Ok(Self::strip_adts_frames(&data))
             }
             SourceFormat::Mp3 => {
                 let data = fs::read(&info.file_path).context("failed to read MP3 file")?;
@@ -265,27 +418,7 @@ impl HlsService {
                     wav_info.channels,
                     128_000,
                 )?;
-                let mut raw = Vec::new();
-                let mut offset = 0;
-                while offset < aac_data.len() {
-                    if let Some(sync) = adts_parser::find_adts_sync(&aac_data, offset) {
-                        if sync > offset {
-                            offset = sync;
-                        }
-                        match adts_parser::parse_adts_frame(&aac_data[offset..]) {
-                            Ok((frame, consumed)) => {
-                                raw.extend_from_slice(&frame.raw_aac);
-                                offset += consumed;
-                            }
-                            Err(_) => {
-                                offset += 1;
-                            }
-                        }
-                    } else {
-                        break;
-                    }
-                }
-                Ok(raw)
+                Ok(Self::strip_adts_frames(&aac_data))
             }
             SourceFormat::Flac => {
                 let flac_info = flac::read_flac(&info.file_path)?;
@@ -302,27 +435,7 @@ impl HlsService {
                     flac_info.channels as u16,
                     128_000,
                 )?;
-                let mut raw = Vec::new();
-                let mut offset = 0;
-                while offset < aac_data.len() {
-                    if let Some(sync) = adts_parser::find_adts_sync(&aac_data, offset) {
-                        if sync > offset {
-                            offset = sync;
-                        }
-                        match adts_parser::parse_adts_frame(&aac_data[offset..]) {
-                            Ok((frame, consumed)) => {
-                                raw.extend_from_slice(&frame.raw_aac);
-                                offset += consumed;
-                            }
-                            Err(_) => {
-                                offset += 1;
-                            }
-                        }
-                    } else {
-                        break;
-                    }
-                }
-                Ok(raw)
+                Ok(Self::strip_adts_frames(&aac_data))
             }
         }
     }

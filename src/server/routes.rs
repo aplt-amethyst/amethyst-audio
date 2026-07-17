@@ -1,7 +1,8 @@
+use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -18,6 +19,7 @@ pub async fn run_server(config: ServerConfig) -> anyhow::Result<()> {
         .route("/health", get(health_handler))
         .route("/streams/level/{id}/playlist.m3u8", get(playlist_handler))
         .route("/streams/level/{id}/{segment}.ts", get(segment_handler))
+        .route("/streams/level/{id}/ingest", post(ingest_handler))
         .route(
             "/api/sources",
             get(list_sources_handler).post(register_source_handler),
@@ -109,16 +111,70 @@ async fn segment_handler(
     }
 }
 
+async fn ingest_handler(
+    State(service): State<Arc<HlsService>>,
+    Path(source_id): Path<String>,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let sources = service.list_sources().await;
+    let exists = sources.iter().any(|s| s.id == source_id);
+
+    if !exists {
+        let default_bitrate = 128_000u64;
+        service
+            .register_live_source(source_id.clone(), default_bitrate)
+            .await;
+        info!(source_id = %source_id, "auto-created live source on first ingest");
+    }
+
+    match service.ingest_chunk(&source_id, &body).await {
+        Ok(()) => Ok(Json(serde_json::json!({
+            "status": "ok",
+            "bytes_received": body.len()
+        }))),
+        Err(e) => {
+            error!(source_id = %source_id, error = %e, "ingest failed");
+            Err(AppError::Internal(e.to_string()))
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct RegisterSourceRequest {
     id: String,
+    #[serde(default)]
     file_path: String,
+    #[serde(default)]
+    live: bool,
+    #[serde(default = "default_bitrate")]
+    bitrate: u64,
+}
+
+fn default_bitrate() -> u64 {
+    128_000
 }
 
 async fn register_source_handler(
     State(service): State<Arc<HlsService>>,
     Json(req): Json<RegisterSourceRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    if req.live {
+        info!(source_id = %req.id, bitrate = req.bitrate, "registering live source");
+        let info = service
+            .register_live_source(req.id.clone(), req.bitrate)
+            .await;
+        return Ok(Json(serde_json::json!({
+            "status": "registered",
+            "source": {
+                "id": info.id,
+                "format": format!("{:?}", info.format),
+                "sample_rate": info.sample_rate,
+                "bitrate_bps": info.bitrate_bps,
+                "live": true,
+            }
+        })));
+    }
+
     info!(source_id = %req.id, file_path = %req.file_path, "registering source");
 
     let file_path = std::path::PathBuf::from(&req.file_path);
@@ -167,6 +223,7 @@ async fn list_sources_handler(State(service): State<Arc<HlsService>>) -> Json<se
                 "format": format!("{:?}", s.format),
                 "sample_rate": s.sample_rate,
                 "duration_sec": s.duration_sec,
+                "live": s.is_live,
             })
         }).collect::<Vec<_>>()
     }))
