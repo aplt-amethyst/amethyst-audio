@@ -45,7 +45,4 @@ check: ## Run clippy lints (fast check, no compilation)
 	$(CARGO) clippy -- -D warnings
 
 deb: build.release ## Build Debian package (.deb)
-	@if [ -f target/release/amethyst-audio.exe ]; then \
-		cp target/release/amethyst-audio.exe target/release/amethyst-audio.bin; \
-	fi
 	$(CARGO) deb
