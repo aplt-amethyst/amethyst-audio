@@ -1,7 +1,10 @@
 #![deny(clippy::all)]
 
+pub mod auth;
 pub mod codec;
 pub mod config;
+pub mod error;
+pub mod log;
 pub mod playlist;
 pub mod server;
 pub mod service;
