@@ -13,7 +13,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut config = ServerConfig {
         host: "0.0.0.0".to_string(),
-        port: 3000,
+        port: 7024,
         segment_duration_sec: 10,
         max_live_segments: 5,
         output_dir: "output".to_string(),

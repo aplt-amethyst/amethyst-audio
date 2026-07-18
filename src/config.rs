@@ -36,7 +36,7 @@ fn default_host() -> String {
     "0.0.0.0".to_string()
 }
 fn default_port() -> u16 {
-    3000
+    7024
 }
 fn default_segment_duration() -> u64 {
     10
