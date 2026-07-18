@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn test_pat_payload_contains_table_id() {
         let pat = build_pat(1, 0x0100);
-        let has_table_id = pat.payload.iter().any(|b| *b == PAT_TABLE_ID);
+        let has_table_id = pat.payload.contains(&PAT_TABLE_ID);
         assert!(has_table_id);
     }
 
