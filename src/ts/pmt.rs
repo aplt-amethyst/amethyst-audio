@@ -1,6 +1,16 @@
 use super::packet::{AdaptationFieldControl, TsPacket};
 use super::pat::compute_crc32;
-use super::{PMT_PID, PMT_TABLE_ID};
+use super::{PMT_PID, PMT_TABLE_ID, STREAM_TYPE_AAC};
+
+const AAC_DESC_TAG: u8 = 0x2C;
+
+fn build_aac_descriptor() -> Vec<u8> {
+    let audio_object_type: u16 = 2;
+    let sample_rate_idx: u16 = 4;
+    let channel_config: u16 = 2;
+    let asc: u16 = (audio_object_type << 11) | (sample_rate_idx << 7) | (channel_config << 3);
+    vec![AAC_DESC_TAG, 0x02, (asc >> 8) as u8, asc as u8]
+}
 
 pub fn build_pmt(
     program_number: u16,
@@ -46,10 +56,16 @@ pub fn build_pmt(
     payload.push(reserved4 | elem_pid_high);
     payload.push(elem_pid_low);
 
+    let es_info: Vec<u8> = if stream_type == STREAM_TYPE_AAC {
+        build_aac_descriptor()
+    } else {
+        Vec::new()
+    };
+    let es_info_length = es_info.len() as u16;
     let reserved5: u8 = 0xF0;
-    let es_info_length = 0u16;
     payload.push(reserved5 | ((es_info_length >> 8) & 0x0F) as u8);
     payload.push((es_info_length & 0xFF) as u8);
+    payload.extend_from_slice(&es_info);
 
     let crc = compute_crc32(&payload);
     payload.push((crc >> 24) as u8);
@@ -104,5 +120,15 @@ mod tests {
     fn test_pmt_payload_unit_start() {
         let pmt = build_pmt(1, 0x0101, 0x0F, 0x0101);
         assert!(pmt.payload_unit_start_indicator);
+    }
+
+    #[test]
+    fn test_pmt_aac_descriptor_present() {
+        let pmt = build_pmt(1, 0x0101, 0x0F, 0x0101);
+        let bytes = pmt.to_bytes();
+        assert!(
+            bytes.windows(2).any(|w| w == [0x2C, 0x02]),
+            "AAC descriptor tag missing"
+        );
     }
 }
