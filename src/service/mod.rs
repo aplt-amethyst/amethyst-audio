@@ -219,7 +219,7 @@ impl HlsService {
         state: &mut IngestState,
         raw_chunk: &[u8],
     ) -> Result<()> {
-        let raw_aac = Self::strip_adts_frames(raw_chunk);
+        let raw_aac = raw_chunk;
         if raw_aac.is_empty() {
             return Ok(());
         }
@@ -229,10 +229,10 @@ impl HlsService {
 
         let packets = if state.segment_idx == 0 || elapsed_seconds == 0 {
             let mut pkts = state.muxer.begin_segment();
-            pkts.extend(state.muxer.mux(&raw_aac, elapsed));
+            pkts.extend(state.muxer.mux(raw_aac, elapsed));
             pkts
         } else {
-            state.muxer.mux(&raw_aac, elapsed_seconds * 1000)
+            state.muxer.mux(raw_aac, elapsed_seconds * 1000)
         };
 
         if packets.is_empty() {
@@ -275,30 +275,6 @@ impl HlsService {
         state.audio_elapsed_ms += (raw_aac.len() as u64 * 8 * 1000) / state.bitrate_bps.max(1);
 
         Ok(())
-    }
-
-    fn strip_adts_frames(data: &[u8]) -> Vec<u8> {
-        let mut raw = Vec::new();
-        let mut offset = 0;
-        while offset < data.len() {
-            if let Some(sync) = adts_parser::find_adts_sync(data, offset) {
-                if sync > offset {
-                    offset = sync;
-                }
-                match adts_parser::parse_adts_frame(&data[offset..]) {
-                    Ok((frame, consumed)) => {
-                        raw.extend_from_slice(&frame.raw_aac);
-                        offset += consumed;
-                    }
-                    Err(_) => {
-                        offset += 1;
-                    }
-                }
-            } else {
-                break;
-            }
-        }
-        raw
     }
 
     fn skip_id3v2(data: &[u8]) -> usize {
@@ -426,11 +402,11 @@ impl HlsService {
         match info.format {
             SourceFormat::Aac => {
                 let data = fs::read(&info.file_path).context("failed to read AAC file")?;
-                Ok(Self::strip_adts_frames(&data))
+                Ok(data)
             }
             SourceFormat::Mp3 => {
                 let aac_data = aac::transcode_file_to_aac(&info.file_path)?;
-                Ok(Self::strip_adts_frames(&aac_data))
+                Ok(aac_data)
             }
             SourceFormat::Wav => {
                 let wav_info = wav::read_wav(&info.file_path)?;
@@ -441,7 +417,7 @@ impl HlsService {
                     wav_info.channels,
                     128_000,
                 )?;
-                Ok(Self::strip_adts_frames(&aac_data))
+                Ok(aac_data)
             }
             SourceFormat::Flac => {
                 let flac_info = flac::read_flac(&info.file_path)?;
@@ -458,7 +434,7 @@ impl HlsService {
                     flac_info.channels as u16,
                     128_000,
                 )?;
-                Ok(Self::strip_adts_frames(&aac_data))
+                Ok(aac_data)
             }
         }
     }
