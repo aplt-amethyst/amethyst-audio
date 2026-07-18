@@ -14,12 +14,24 @@ use crate::auth::models::*;
 use crate::auth::AuthState;
 use crate::config::ServerConfig;
 use crate::error::AppError;
+use crate::rtmp::RtmpServer;
 use crate::service::HlsService;
 
 use super::AppState;
 
 pub async fn run_server(config: ServerConfig, auth_state: Arc<AuthState>) -> anyhow::Result<()> {
     let service = Arc::new(HlsService::new(config.clone()));
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+    if config.rtmp.enabled {
+        let rtmp_server = RtmpServer::new(config.rtmp.clone(), service.clone(), shutdown_rx);
+        let _rtmp_handle = rtmp_server.spawn();
+        info!(
+            rtmp_port = config.rtmp.port,
+            "RTMP server started"
+        );
+    }
 
     let app_state = AppState {
         service: service.clone(),
@@ -49,12 +61,17 @@ pub async fn run_server(config: ServerConfig, auth_state: Arc<AuthState>) -> any
 
     info!(%addr, "amethyst-audio server starting");
 
-    axum::serve(
+    let server = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal())
-    .await?;
+    );
+
+    let shutdown = async move {
+        shutdown_signal().await;
+        let _ = shutdown_tx.send(true);
+    };
+
+    server.with_graceful_shutdown(shutdown).await?;
 
     info!("amethyst-audio server shut down gracefully");
     Ok(())

@@ -6,6 +6,7 @@ pub mod config;
 pub mod error;
 pub mod log;
 pub mod playlist;
+pub mod rtmp;
 pub mod server;
 pub mod service;
 pub mod ts;

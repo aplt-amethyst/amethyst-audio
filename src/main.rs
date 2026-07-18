@@ -201,5 +201,12 @@ async fn main() -> anyhow::Result<()> {
         app_logger.info("Auth disabled, running in open mode");
     }
 
+    if config.rtmp.enabled {
+        app_logger.info(&format!(
+            "RTMP server enabled on port {}",
+            config.rtmp.port
+        ));
+    }
+
     run_server(config, auth_state).await
 }
