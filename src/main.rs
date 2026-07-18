@@ -1,4 +1,5 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
+use rand::Rng;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
@@ -18,6 +19,9 @@ use amethyst_audio::server::run_server;
     about = "HLS stream server with pure Rust MPEG-TS muxer"
 )]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     #[arg(short, long, default_value = "/etc/amethyst-audio/config.yaml")]
     config: PathBuf,
 
@@ -35,6 +39,50 @@ struct Cli {
 
     #[arg(long = "output-dir")]
     output_dir: Option<String>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    Init {
+        #[arg(short, long, default_value = "/etc/amethyst-audio/config.yaml")]
+        output: PathBuf,
+    },
+}
+
+fn run_init(output: &PathBuf) -> anyhow::Result<()> {
+    if output.exists() {
+        eprintln!(
+            "Config file already exists at {}. Use --output to specify a different path.",
+            output.display()
+        );
+        anyhow::bail!("config file already exists");
+    }
+
+    let mut config = ServerConfig::default();
+    config.auth.jwt_secret = generate_secret_hex(64);
+
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+
+    let yaml = serde_yaml::to_string(&config)?;
+    std::fs::write(output, yaml.as_bytes())?;
+
+    println!("Config template written to {}", output.display());
+    println!();
+    println!("Edit this file to configure your server.");
+    println!();
+    println!("Start with default config:  amethyst-audio");
+    println!("Start with this config:     amethyst-audio --config {}", output.display());
+
+    Ok(())
+}
+
+fn generate_secret_hex(len: usize) -> String {
+    let mut rng = rand::thread_rng();
+    (0..len).map(|_| format!("{:02x}", rng.gen::<u8>())).collect()
 }
 
 fn load_config(cli: &Cli) -> anyhow::Result<ServerConfig> {
@@ -99,9 +147,14 @@ fn init_logging() {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+
+    if let Some(Command::Init { ref output }) = cli.command {
+        return run_init(output);
+    }
+
     init_logging();
 
-    let cli = Cli::parse();
     let config = load_config(&cli)?;
 
     let app_logger = Arc::new(AppLogger::new(&config.logging));
