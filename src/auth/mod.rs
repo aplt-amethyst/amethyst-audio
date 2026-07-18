@@ -41,6 +41,12 @@ pub struct AuthState {
 impl AuthState {
     pub async fn new_async(config: AuthConfig) -> Result<Self> {
         let audit = Arc::new(AuditLogger::new(&config.audit_log));
+        if !audit.is_writable() {
+            tracing::warn!(
+                path = %config.audit_log,
+                "audit log file not writable, audit events will be discarded"
+            );
+        }
 
         let state = Self {
             config: config.clone(),

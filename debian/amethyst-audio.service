@@ -20,7 +20,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/lib/amethyst-audio
+ReadWritePaths=/var/lib/amethyst-audio /var/log/amethyst-audio
 ReadOnlyPaths=/etc/amethyst-audio
 
 [Install]

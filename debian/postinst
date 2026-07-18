@@ -10,9 +10,10 @@ if ! getent passwd amethyst-audio >/dev/null; then
         --home /var/lib/amethyst-audio --shell /usr/sbin/nologin amethyst-audio
 fi
 
-# Create state directory
+# Create state directories
 mkdir -p /var/lib/amethyst-audio/output
-chown -R amethyst-audio:amethyst-audio /var/lib/amethyst-audio
+mkdir -p /var/log/amethyst-audio
+chown -R amethyst-audio:amethyst-audio /var/lib/amethyst-audio /var/log/amethyst-audio
 
 # Enable and start the service
 if [ -x /usr/bin/systemctl ] || [ -x /bin/systemctl ]; then

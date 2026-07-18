@@ -5,31 +5,46 @@ use std::sync::Mutex;
 use chrono::Local;
 
 pub struct AuditLogger {
-    writer: Mutex<BufWriter<std::fs::File>>,
+    writer: Option<Mutex<BufWriter<std::fs::File>>>,
 }
 
 impl AuditLogger {
     pub fn new(path: &str) -> Self {
-        let file = OpenOptions::new()
+        let file = match OpenOptions::new()
             .create(true)
             .append(true)
             .open(path)
-            .unwrap_or_else(|e| {
+        {
+            Ok(f) => f,
+            Err(e) => {
                 eprintln!("failed to open audit log file {path}: {e}");
-                std::fs::File::create(path).expect("failed to create audit log file")
-            });
+                return Self { writer: None };
+            }
+        };
 
         Self {
-            writer: Mutex::new(BufWriter::new(file)),
+            writer: Some(Mutex::new(BufWriter::new(file))),
         }
     }
 
+    pub fn disabled() -> Self {
+        Self { writer: None }
+    }
+
+    pub fn is_writable(&self) -> bool {
+        self.writer.is_some()
+    }
+
     fn write(&self, event: &str, username: &str, ip: &str, msg: &str, result: &str) {
+        let writer = match &self.writer {
+            Some(w) => w,
+            None => return,
+        };
         let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
         let line = format!(
             "[{ts}]{event}/server<{username}@{ip}>:{msg}({result})\n"
         );
-        if let Ok(mut w) = self.writer.lock() {
+        if let Ok(mut w) = writer.lock() {
             let _ = w.write_all(line.as_bytes());
             let _ = w.flush();
         }
