@@ -7,7 +7,6 @@ use crate::ts::adts_parser;
 use crate::ts::mp3_parser;
 use crate::ts::muxer::{write_packets, TsMuxer};
 use crate::ts::STREAM_TYPE_AAC;
-use crate::ts::STREAM_TYPE_MP3;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::fs;
@@ -100,19 +99,24 @@ impl HlsService {
             }
             SourceFormat::Aac | SourceFormat::Mp3 => {
                 let file_data = fs::read(&file_path).context("failed to read source file")?;
-                let (sr, br) = Self::probe_raw_audio(&file_data, format);
+                let (sr, original_br) = Self::probe_raw_audio(&file_data, format);
                 let effective_len = if format == SourceFormat::Mp3 {
                     let offset = Self::skip_id3v2(&file_data);
                     file_data.len() - offset
                 } else {
                     file_data.len()
                 };
-                let duration = if br > 0 {
-                    effective_len as f64 * 8.0 / br as f64
+                let duration = if original_br > 0 {
+                    effective_len as f64 * 8.0 / original_br as f64
                 } else {
                     0.0
                 };
-                (sr, br, duration)
+                let output_br = if format == SourceFormat::Mp3 {
+                    128_000
+                } else {
+                    original_br
+                };
+                (sr, output_br, duration)
             }
         };
 
@@ -343,8 +347,9 @@ impl HlsService {
 
         let raw_audio = self.load_and_prepare_audio(&info)?;
         let stream_type = match info.format {
-            SourceFormat::Aac | SourceFormat::Wav | SourceFormat::Flac => STREAM_TYPE_AAC,
-            SourceFormat::Mp3 => STREAM_TYPE_MP3,
+            SourceFormat::Aac | SourceFormat::Wav | SourceFormat::Flac | SourceFormat::Mp3 => {
+                STREAM_TYPE_AAC
+            }
         };
 
         let segment_bytes =
@@ -424,9 +429,8 @@ impl HlsService {
                 Ok(Self::strip_adts_frames(&data))
             }
             SourceFormat::Mp3 => {
-                let data = fs::read(&info.file_path).context("failed to read MP3 file")?;
-                let offset = Self::skip_id3v2(&data);
-                Ok(data[offset..].to_vec())
+                let aac_data = aac::transcode_file_to_aac(&info.file_path)?;
+                Ok(Self::strip_adts_frames(&aac_data))
             }
             SourceFormat::Wav => {
                 let wav_info = wav::read_wav(&info.file_path)?;
