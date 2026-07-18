@@ -10,6 +10,7 @@ pub mod rtmp;
 pub mod server;
 pub mod service;
 pub mod ts;
+pub mod upload;
 
 pub use ts::muxer::TsMuxer;
 pub use ts::packet::TsPacket;

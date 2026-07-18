@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use axum::extract::Multipart;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::config::UploadConfig;
 use crate::error::AppError;
@@ -43,7 +43,8 @@ pub async fn handle_upload(
                 validate_filename(&filename)
                     .map_err(AppError::BadRequest)?;
 
-                let ext = PathBuf::from(&filename)
+                let path_buf = PathBuf::from(&filename);
+                let ext = path_buf
                     .extension()
                     .and_then(|e| e.to_str())
                     .unwrap_or("");
@@ -56,7 +57,8 @@ pub async fn handle_upload(
                 }
 
                 let dest_name = if source_id.is_empty() {
-                    let stem = PathBuf::from(&filename)
+                    let path_buf = PathBuf::from(&filename);
+                    let stem = path_buf
                         .file_stem()
                         .and_then(|s| s.to_str())
                         .unwrap_or("upload");
@@ -121,7 +123,7 @@ pub async fn handle_upload(
                     warn!(source_id = %source_id, error = %e, "vod segment generation had issues");
                 }
             }
-            Some(info)
+            info
         }
         Err(e) => {
             warn!(error = %e, "register source failed, removing uploaded file");

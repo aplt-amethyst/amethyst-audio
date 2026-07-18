@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-axum = { version = "0.8", features = ["macros"] }
+axum = { version = "0.8", features = ["macros", "multipart"] }
 tower-http = { version = "0.6", features = ["cors"] }
 thiserror = "2"
 anyhow = "1"

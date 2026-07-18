@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use axum::body::Bytes;
-use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Query, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{delete, get, post, put};
@@ -52,6 +52,9 @@ pub async fn run_server(config: ServerConfig, auth_state: Arc<AuthState>) -> any
         .route("/api/sources/{id}/flush", post(flush_source_handler))
         .route("/api/sources/{id}/access-keys", get(list_access_keys_handler).post(create_access_key_handler))
         .route("/api/sources/{id}/access-keys/{kid}", delete(delete_access_key_handler))
+        .route("/api/upload", post(upload_handler)
+            .layer(DefaultBodyLimit::max(500 * 1024 * 1024)))
+        .route("/api/playlists", get(playlists_handler))
         .merge(crate::auth::routes::auth_routes())
         .layer(CorsLayer::permissive())
         .with_state(app_state.clone());
@@ -675,6 +678,58 @@ async fn delete_access_key_handler(
         "status": "revoked",
         "id": kid,
     })))
+}
+
+async fn upload_handler(
+    auth_user: AuthUser,
+    State(state): State<AppState>,
+    multipart: Multipart,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let result = crate::upload::handle_upload(
+        multipart,
+        state.service.clone(),
+        &state.config.upload,
+        auth_user.user_id.clone(),
+    )
+    .await?;
+    Ok(Json(result))
+}
+
+async fn playlists_handler(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    let sources = state.service.list_sources().await;
+    let base_url = "https://stream.aplcexenicesetrl.com";
+
+    let list: Vec<_> = sources
+        .iter()
+        .filter(|s| {
+            if state.config.auth.enabled {
+                s.is_public_playback
+            } else {
+                true
+            }
+        })
+        .map(|s| {
+            let url = format!("{base_url}/streams/level/{}/playlist.m3u8", s.id);
+            serde_json::json!({
+                "id": s.id,
+                "format": format!("{:?}", s.format),
+                "live": s.is_live,
+                "duration_sec": if s.is_live { serde_json::Value::Null } else { serde_json::json!(s.duration_sec) },
+                "sample_rate": s.sample_rate,
+                "is_public_playback": s.is_public_playback,
+                "owner_id": s.owner_id,
+                "url": url,
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({
+        "base_url": base_url,
+        "playlists": list,
+        "total": list.len(),
+    }))
 }
 
 fn is_safe_segment_name(name: &str) -> bool {
