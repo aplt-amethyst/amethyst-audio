@@ -5,3 +5,29 @@ port: 3000
 segment_duration_sec: 10
 max_live_segments: 5
 output_dir: "/var/lib/amethyst-audio/output"
+
+logging:
+  enabled: true
+  file: "/var/log/amethyst-audio/server.log"
+  level: "info"
+
+auth:
+  enabled: true
+  jwt_secret: "change-me-in-production"
+  jwt_expiry_sec: 3600
+  allow_registration: true
+  max_streams_per_user: 0
+  audit_log: "/var/log/amethyst-audio/auth.log"
+  invite_code:
+    enabled: false
+    display_name: "Invite Code"
+    code_length: 8
+    default_expiry_days: 7
+  admin_user:
+    username: "admin"
+    password: "admin12345"
+  api_key:
+    prefix: "amt_"
+    key_length: 32
+  users_file: "/var/lib/amethyst-audio/users.json"
+  sources_file: "/var/lib/amethyst-audio/sources.json"
