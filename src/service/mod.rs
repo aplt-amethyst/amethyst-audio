@@ -23,6 +23,10 @@ pub struct SourceInfo {
     pub bitrate_bps: u64,
     pub duration_sec: f64,
     pub is_live: bool,
+    pub owner_id: String,
+    pub push_password_hash: String,
+    pub is_public_ingest: bool,
+    pub is_public_playback: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,7 +49,7 @@ impl SourceFormat {
     }
 }
 
-struct IngestState {
+pub(crate) struct IngestState {
     buffer: Vec<u8>,
     muxer: TsMuxer,
     segment_idx: u32,
@@ -54,11 +58,11 @@ struct IngestState {
 }
 
 pub struct HlsService {
-    config: ServerConfig,
-    output_dir: PathBuf,
-    sources: RwLock<HashMap<String, SourceInfo>>,
-    playlists: RwLock<HashMap<String, Playlist>>,
-    ingest_states: RwLock<HashMap<String, IngestState>>,
+    pub(crate) config: ServerConfig,
+    pub(crate) output_dir: PathBuf,
+    pub(crate) sources: RwLock<HashMap<String, SourceInfo>>,
+    pub(crate) playlists: RwLock<HashMap<String, Playlist>>,
+    pub(crate) ingest_states: RwLock<HashMap<String, IngestState>>,
 }
 
 impl HlsService {
@@ -75,7 +79,44 @@ impl HlsService {
         }
     }
 
-    pub async fn register_source(&self, id: String, file_path: PathBuf) -> Result<SourceInfo> {
+    pub async fn get_source(&self, id: &str) -> Option<SourceInfo> {
+        let sources = self.sources.read().await;
+        sources.get(id).cloned()
+    }
+
+    pub async fn remove_source(&self, id: &str) -> Option<SourceInfo> {
+        let mut sources = self.sources.write().await;
+        sources.remove(id)
+    }
+
+    pub async fn cleanup_source_files(&self, source_id: &str) -> Result<()> {
+        if let Ok(entries) = std::fs::read_dir(&self.output_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                let prefix = format!("{source_id}-");
+                if name_str.starts_with(&prefix) && name_str.ends_with(".ts") {
+                    let _ = std::fs::remove_file(entry.path());
+                    debug!(source_id = %source_id, file = %name_str, "cleaned up source file");
+                }
+            }
+        }
+
+        let mut playlists = self.playlists.write().await;
+        playlists.remove(source_id);
+
+        let mut states = self.ingest_states.write().await;
+        states.remove(source_id);
+
+        Ok(())
+    }
+
+    pub async fn register_source(
+        &self,
+        id: String,
+        file_path: PathBuf,
+        owner_id: String,
+    ) -> Result<SourceInfo> {
         let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let format = SourceFormat::from_extension(ext)
             .with_context(|| format!("unsupported format: {ext}"))?;
@@ -128,6 +169,10 @@ impl HlsService {
             bitrate_bps,
             duration_sec,
             is_live: false,
+            owner_id,
+            push_password_hash: String::new(),
+            is_public_ingest: false,
+            is_public_playback: true,
         };
 
         let mut sources = self.sources.write().await;
@@ -142,7 +187,15 @@ impl HlsService {
         Ok(info)
     }
 
-    pub async fn register_live_source(&self, id: String, bitrate_bps: u64) -> SourceInfo {
+    pub async fn register_live_source(
+        &self,
+        id: String,
+        bitrate_bps: u64,
+        owner_id: String,
+        push_password_hash: String,
+        is_public_ingest: bool,
+        is_public_playback: bool,
+    ) -> SourceInfo {
         let info = SourceInfo {
             id: id.clone(),
             file_path: PathBuf::new(),
@@ -151,6 +204,10 @@ impl HlsService {
             bitrate_bps,
             duration_sec: 0.0,
             is_live: true,
+            owner_id,
+            push_password_hash,
+            is_public_ingest,
+            is_public_playback,
         };
 
         let mut sources = self.sources.write().await;
@@ -176,6 +233,31 @@ impl HlsService {
 
         info!(source_id = %id, bitrate_bps, "live source registered");
         info
+    }
+
+    pub async fn update_live_source_config(
+        &self,
+        id: &str,
+        push_password_hash: Option<String>,
+        is_public_ingest: Option<bool>,
+        is_public_playback: Option<bool>,
+    ) -> Result<()> {
+        let mut sources = self.sources.write().await;
+        let source = sources
+            .get_mut(id)
+            .with_context(|| format!("source not found: {id}"))?;
+
+        if let Some(hash) = push_password_hash {
+            source.push_password_hash = hash;
+        }
+        if let Some(flag) = is_public_ingest {
+            source.is_public_ingest = flag;
+        }
+        if let Some(flag) = is_public_playback {
+            source.is_public_playback = flag;
+        }
+
+        Ok(())
     }
 
     pub async fn ingest_chunk(&self, id: &str, data: &[u8]) -> Result<()> {
