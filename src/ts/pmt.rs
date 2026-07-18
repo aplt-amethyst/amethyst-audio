@@ -112,7 +112,7 @@ mod tests {
     #[test]
     fn test_pmt_contains_stream_type() {
         let pmt = build_pmt(1, 0x0101, 0x0F, 0x0101);
-        let has_stream_type = pmt.payload.contains(&0x0F);
+        let has_stream_type = pmt.payload.iter().any(|b| *b == 0x0F);
         assert!(has_stream_type);
     }
 

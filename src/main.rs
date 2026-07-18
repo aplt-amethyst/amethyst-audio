@@ -1,14 +1,12 @@
 use clap::Parser;
 use std::path::PathBuf;
-use std::sync::Arc;
 use tracing::info;
+use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
-use amethyst_audio::auth::AuthState;
 use amethyst_audio::config::ServerConfig;
-use amethyst_audio::log::AppLogger;
 use amethyst_audio::server::run_server;
 
 #[derive(Parser)]
@@ -83,10 +81,11 @@ fn load_config(cli: &Cli) -> anyhow::Result<ServerConfig> {
 }
 
 fn init_logging() {
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("warn"));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     let fmt_layer = tracing_subscriber::fmt::layer()
+        .json()
+        .with_span_events(FmtSpan::CLOSE)
         .with_target(true)
         .with_file(true)
         .with_line_number(true);
@@ -104,43 +103,14 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let config = load_config(&cli)?;
 
-    let app_logger = Arc::new(AppLogger::new(&config.logging));
-
-    app_logger.info(&format!(
-        "Server starting on {}:{}",
-        config.host, config.port
-    ));
-
     info!(
         host = %config.host,
         port = config.port,
         segment_duration_sec = config.segment_duration_sec,
         max_live_segments = config.max_live_segments,
         output_dir = %config.output_dir,
-        auth_enabled = config.auth.enabled,
         "amethyst-audio initializing"
     );
 
-    let auth_state = if config.auth.enabled {
-        match AuthState::new_async(config.auth.clone()).await {
-            Ok(state) => Arc::new(state),
-            Err(e) => {
-                tracing::error!(error = %e, "failed to initialize auth state, disabling auth");
-                Arc::new(AuthState::new_async(Default::default()).await?)
-            }
-        }
-    } else {
-        Arc::new(AuthState::new_async(Default::default()).await?)
-    };
-
-    if config.auth.enabled {
-        app_logger.info(&format!(
-            "Auth enabled, admin user: {}",
-            config.auth.admin_user.username
-        ));
-    } else {
-        app_logger.info("Auth disabled, running in open mode");
-    }
-
-    run_server(config, auth_state).await
+    run_server(config).await
 }
