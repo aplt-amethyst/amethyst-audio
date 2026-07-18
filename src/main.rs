@@ -39,6 +39,9 @@ struct Cli {
 
     #[arg(long = "output-dir")]
     output_dir: Option<String>,
+
+    #[arg(long = "rtmp-port")]
+    rtmp_port: Option<u16>,
 }
 
 #[derive(Subcommand)]
@@ -125,6 +128,9 @@ fn load_config(cli: &Cli) -> anyhow::Result<ServerConfig> {
     }
     if let Some(ref od) = cli.output_dir {
         config.output_dir = od.clone();
+    }
+    if let Some(rtmp_port) = cli.rtmp_port {
+        config.rtmp.port = rtmp_port;
     }
 
     Ok(config)

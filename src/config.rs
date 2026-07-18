@@ -16,6 +16,8 @@ pub struct ServerConfig {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub rtmp: RtmpConfig,
 }
 
 impl Default for ServerConfig {
@@ -28,6 +30,7 @@ impl Default for ServerConfig {
             output_dir: default_output_dir(),
             logging: LoggingConfig::default(),
             auth: AuthConfig::default(),
+            rtmp: RtmpConfig::default(),
         }
     }
 }
@@ -213,4 +216,28 @@ fn default_api_key_prefix() -> String {
 }
 fn default_api_key_length() -> usize {
     32
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RtmpConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_rtmp_port")]
+    pub port: u16,
+    #[serde(default = "default_host")]
+    pub bind_address: String,
+}
+
+impl Default for RtmpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: default_rtmp_port(),
+            bind_address: default_host(),
+        }
+    }
+}
+
+fn default_rtmp_port() -> u16 {
+    1935
 }
