@@ -4,6 +4,7 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tracing::{error, info};
 
+use crate::auth::AuthState;
 use crate::config::RtmpConfig;
 use crate::service::HlsService;
 
@@ -12,14 +13,21 @@ use super::session::run_session;
 pub struct RtmpServer {
     config: RtmpConfig,
     service: Arc<HlsService>,
+    auth: Option<Arc<AuthState>>,
     shutdown_rx: watch::Receiver<bool>,
 }
 
 impl RtmpServer {
-    pub fn new(config: RtmpConfig, service: Arc<HlsService>, shutdown_rx: watch::Receiver<bool>) -> Self {
+    pub fn new(
+        config: RtmpConfig,
+        service: Arc<HlsService>,
+        auth: Option<Arc<AuthState>>,
+        shutdown_rx: watch::Receiver<bool>,
+    ) -> Self {
         Self {
             config,
             service,
+            auth,
             shutdown_rx,
         }
     }
@@ -47,9 +55,10 @@ impl RtmpServer {
                     match result {
                         Ok((stream, peer)) => {
                             let svc = self.service.clone();
+                            let auth = self.auth.clone();
                             info!(%peer, "RTMP connection accepted");
                             tokio::spawn(async move {
-                                if let Err(e) = run_session(stream, svc).await {
+                                if let Err(e) = run_session(stream, svc, auth).await {
                                     error!(%peer, error = %e, "RTMP session error");
                                 }
                                 info!(%peer, "RTMP session ended");

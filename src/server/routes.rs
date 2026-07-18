@@ -25,7 +25,8 @@ pub async fn run_server(config: ServerConfig, auth_state: Arc<AuthState>) -> any
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
     if config.rtmp.enabled {
-        let rtmp_server = RtmpServer::new(config.rtmp.clone(), service.clone(), shutdown_rx);
+        let rtmp_auth = if config.auth.enabled { Some(auth_state.clone()) } else { None };
+        let rtmp_server = RtmpServer::new(config.rtmp.clone(), service.clone(), rtmp_auth, shutdown_rx);
         let _rtmp_handle = rtmp_server.spawn();
         info!(
             rtmp_port = config.rtmp.port,

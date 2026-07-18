@@ -4,9 +4,11 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
+use crate::auth::AuthState;
+use crate::auth::models::UserRole;
 use crate::service::HlsService;
 
-use super::amf0::{encode_result_command, encode_on_status};
+use super::amf0::{encode_on_status, encode_result_command};
 use super::chunk::{ChunkReader, ChunkWriter, RTMP_CHUNK_SIZE};
 use super::flv::extract_aac_from_flv_tag;
 use super::handshake::run_server_handshake;
@@ -23,6 +25,7 @@ enum SessionState {
 pub async fn run_session(
     mut stream: TcpStream,
     service: Arc<HlsService>,
+    auth: Option<Arc<AuthState>>,
 ) -> anyhow::Result<()> {
     run_server_handshake(&mut stream).await?;
     debug!("RTMP handshake complete");
@@ -84,29 +87,47 @@ pub async fn run_session(
                         }
                         RtmpCommand::Publish { transaction_id, stream_name, stream_type: _ } => {
                             if let SessionState::Ready { stream_id } = state {
-                                let source_id = stream_name.clone();
-                                let mut status = "success";
+                                let (source_id, auth_param) = parse_stream_key(&stream_name);
+
+                                let auth_result = verify_rtmp_auth(
+                                    &service, &auth, &source_id, auth_param.as_deref(),
+                                ).await;
+
+                                let is_public_ingest = service
+                                    .get_source(&source_id)
+                                    .await
+                                    .map(|s| s.is_public_ingest)
+                                    .unwrap_or(false);
+
+                                if !is_public_ingest && !auth_result {
+                                    warn!(source_id = %source_id, "RTMP publish rejected: unauthorized");
+                                    let on_status = encode_on_status(
+                                        "error",
+                                        "NetStream.Publish.BadName",
+                                        "unauthorized stream key",
+                                    );
+                                    control_writer.write_message(&mut stream, MSG_TYPE_AMF0_COMMAND, &on_status, 0).await?;
+                                    anyhow::bail!("RTMP publish rejected: unauthorized");
+                                }
+
                                 let existing = service.list_sources().await;
                                 let found = existing.iter().any(|s| s.id == source_id);
 
                                 if !found {
-                                    let pw_hash = String::new();
                                     service
                                         .register_live_source(
                                             source_id.clone(),
                                             128_000,
                                             String::new(),
-                                            pw_hash,
+                                            String::new(),
                                             true,
                                             true,
                                         )
                                         .await;
                                     info!(source_id = %source_id, "auto-created live source from RTMP publish");
-                                } else {
-                                    status = "success";
                                 }
 
-                                let on_status = encode_on_status("status", "NetStream.Publish.Start", &format!("{status}"));
+                                let on_status = encode_on_status("status", "NetStream.Publish.Start", "success");
                                 control_writer.write_message(&mut stream, MSG_TYPE_AMF0_COMMAND, &on_status, 0).await?;
                                 state = SessionState::Publishing { stream_id, source_id };
                                 let _ = transaction_id;
@@ -156,4 +177,69 @@ pub async fn run_session(
             _ => {}
         }
     }
+}
+
+fn parse_stream_key(raw: &str) -> (String, Option<String>) {
+    if let Some(pos) = raw.find('?') {
+        let source_id = raw[..pos].to_string();
+        let query = &raw[pos + 1..];
+        let mut pwd = None;
+        for part in query.split('&') {
+            if let Some(v) = part.strip_prefix("pwd=") {
+                pwd = Some(format!("pwd={v}"));
+            } else if let Some(v) = part.strip_prefix("token=") {
+                pwd = Some(format!("token={v}"));
+            }
+        }
+        (source_id, pwd)
+    } else {
+        (raw.to_string(), None)
+    }
+}
+
+async fn verify_rtmp_auth(
+    service: &HlsService,
+    auth: &Option<Arc<AuthState>>,
+    source_id: &str,
+    auth_param: Option<&str>,
+) -> bool {
+    let auth_state = match auth {
+        Some(a) => a,
+        None => return true,
+    };
+
+    let Some(source) = service.get_source(source_id).await else {
+        return false;
+    };
+
+    let Some(param) = auth_param else {
+        return source.is_public_ingest;
+    };
+
+    if let Some(pwd) = param.strip_prefix("pwd=") {
+        if source.push_password_hash.is_empty() {
+            return false;
+        }
+        return auth_state
+            .verify_password(pwd, &source.push_password_hash)
+            .unwrap_or(false);
+    }
+
+    if let Some(token) = param.strip_prefix("token=") {
+        return match auth_state.verify_jwt(token) {
+            Ok(claims) => {
+                let users = auth_state.users.read().await;
+                if let Some(user) = users.get(&claims.sub) {
+                    if user.role == UserRole::Admin {
+                        return true;
+                    }
+                    return source.owner_id == user.id;
+                }
+                false
+            }
+            Err(_) => false,
+        };
+    }
+
+    false
 }
