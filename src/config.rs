@@ -18,6 +18,8 @@ pub struct ServerConfig {
     pub auth: AuthConfig,
     #[serde(default)]
     pub rtmp: RtmpConfig,
+    #[serde(default)]
+    pub upload: UploadConfig,
 }
 
 impl Default for ServerConfig {
@@ -31,6 +33,7 @@ impl Default for ServerConfig {
             logging: LoggingConfig::default(),
             auth: AuthConfig::default(),
             rtmp: RtmpConfig::default(),
+            upload: UploadConfig::default(),
         }
     }
 }
@@ -240,4 +243,29 @@ impl Default for RtmpConfig {
 
 fn default_rtmp_port() -> u16 {
     1935
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadConfig {
+    #[serde(default = "default_upload_dir")]
+    pub dir: String,
+    #[serde(default = "default_upload_max_size")]
+    pub max_size_mb: usize,
+}
+
+impl Default for UploadConfig {
+    fn default() -> Self {
+        Self {
+            dir: default_upload_dir(),
+            max_size_mb: default_upload_max_size(),
+        }
+    }
+}
+
+fn default_upload_dir() -> String {
+    "uploads".to_string()
+}
+
+fn default_upload_max_size() -> usize {
+    500
 }
