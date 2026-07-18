@@ -299,11 +299,7 @@ impl HlsService {
 
     fn skip_id3v2(data: &[u8]) -> usize {
         if data.len() >= 10 && &data[..3] == b"ID3" {
-            let size = ((data[6] as usize & 0x7F) << 21)
-                | ((data[7] as usize & 0x7F) << 14)
-                | ((data[8] as usize & 0x7F) << 7)
-                | (data[9] as usize & 0x7F);
-            (10 + size).min(data.len())
+            crate::ts::mp3_parser::find_mp3_sync(data, 10).unwrap_or(10)
         } else if data.len() >= 2 {
             crate::ts::mp3_parser::find_mp3_sync(data, 0).unwrap_or(0)
         } else {
